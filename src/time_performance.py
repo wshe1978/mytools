@@ -1,5 +1,7 @@
 import argparse
+import concurrent.futures
 import logging
+import shlex
 import subprocess
 import sys
 import time
@@ -36,9 +38,9 @@ def get_commits(repo, branch, sha=None, per_page=100):
     else:
         # if sha is supplied, the sha must be the last sha from previous page, then we need to retrieve `per_page + 1` commits
         _per_page = per_page + 1
-    cmd = 'git -C {} rev-list {} --remotes={} --pretty=format:"%H,%an <%ae>,%aI,%cn <%ce>,%cI,%s" --max-count={}'.format(REPO.format(repo), sha, BRANCH.format(branch), per_page)
+    cmd = 'git -C {} rev-list {} --remotes={} --pretty=format:"%H,%an <%ae>,%aI,%cn <%ce>,%cI,%s" --skip=300 --max-count={}'.format(REPO.format(repo), sha, BRANCH.format(branch), per_page)
     try:
-        cpi = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=True)
+        cpi = subprocess.run(shlex.split(cmd), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=True)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         raise
     else:
@@ -115,7 +117,7 @@ def search_commits(repo, author=None, committer=None, description=None):
     if description:
         cmd += ' --grep="{}"'.format(description)
     try:
-        cpi = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=True)
+        cpi = subprocess.run(shlex.split(cmd), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=True)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         raise
     else:
@@ -135,6 +137,8 @@ def search_commits(repo, author=None, committer=None, description=None):
             }
             commits.append(commit)
         logger.debug('Found %s commits', len(commits))
+        # for i in range(len(commits)):
+        #     logger.debug(' * %s', commits[i]['commit'])
         return commits
     finally:
         end_time = time.time()
@@ -164,6 +168,13 @@ if __name__ == '__main__':
     search_parser.add_argument('--committer', action='store', dest='committer', default=None, type=str, help='specify sha of commit')
     search_parser.add_argument('--description', action='store', dest='description', default=None, type=str, help='specify page size')
 
+    concurrent_search_parser = subparsers.add_parser('concurrent_search_commits')
+    concurrent_search_parser.add_argument('--concurrency', action='store', dest='concurrency', required=True, type=int, help='specify concurrency')
+    concurrent_search_parser.add_argument('--repo', action='store', dest='repo', required=True, type=str, help='specify name of repo')
+    concurrent_search_parser.add_argument('--author', action='store', dest='author', default=None, type=str, help='specify name of branch')
+    concurrent_search_parser.add_argument('--committer', action='store', dest='committer', default=None, type=str, help='specify sha of commit')
+    concurrent_search_parser.add_argument('--description', action='store', dest='description', default=None, type=str, help='specify page size')
+
     args = parser.parse_args()
 
     logging.basicConfig(format='%(asctime)s %(levelname)s %(name)s %(threadName)s: %(message)s',
@@ -180,3 +191,7 @@ if __name__ == '__main__':
         get_commit(args.repo, sha)
     elif args.command == 'search_commits':
         search_commits(args.repo, args.author, args.committer, args.description)
+    else:
+        with concurrent.futures.ProcessPoolExecutor() as executor:
+            for _ in range(args.concurrency):
+                executor.submit(search_commits, args.repo, args.author, args.committer, args.description)
